@@ -117,7 +117,10 @@ bun main.js ridoy /path/to/lecture.pdf course/week3 --headless --gen-timeout 45
 | `<account>` | Browser profile `./auth/<account>/` **and** rclone remote `<account>:` |
 | `<local-file>` | File to upload. **Deleted after a confirmed note.** |
 | `[remote-path]` | Drive folder (default `uploads/`) |
-| `--headless` | Hide the browser (default is headed) |
+| `--headless` | Hide the browser (no window) |
+| `--minimize` | Headed, window minimized via CDP (default for `batch.js`) |
+| `--tile` | Headed, small window in the corner |
+| `--show` | Headed, left where the window manager places it (default for `main.js`) |
 | `--gen-timeout <minutes>` | Max generation wait (default 30; long audio notes need 5–10+) |
 
 Outputs:
@@ -125,13 +128,56 @@ Outputs:
 - `./notes/<input-name-without-ext>.md` — the study note
 - `./tmp/<account>/upload.json`, `drive_link.txt` — run metadata (staging dir)
 
+## Batch mode (`batch.js`)
+
+`batch.js` is a one-command front end that goes from **clipboard URLs to
+notes**: it reads the newest batch of URLs from the clipboard-indicator
+registry, downloads them with `yt-dlp`, archives each to Drive once, and
+generates a study note per file. There is no intermediate Drive
+re-download — each file is uploaded exactly once and that same public link
+feeds AI Studio.
+
+```bash
+# Process the current clipboard batch (account defaults to ibny)
+bun batch.js
+
+# Preview the yt-dlp commands without downloading
+bun batch.js --dry-run
+
+# Explicit account, URL list, visible browser, first file only
+bun batch.js ibny --file urls.txt --show --limit 1
+```
+
+| Flag | Meaning |
+| ---- | ------- |
+| `[account]` | Browser profile + rclone remote (default `ibny`) |
+| `--file <urls.txt>` | Read URLs from a file instead of clipboard history |
+| `--dry-run` | Print the plan / yt-dlp commands only |
+| `--limit <n>` | Process only the first `n` URLs |
+| `--gen-timeout <min>` | Max generation wait per file (default 30) |
+| `--minimize` / `--tile` / `--show` / `--headless` | Browser window mode (default `minimize`) |
+| `--no-archive` | Upload to temp `uploads/` and delete after the note instead of keeping the archive |
+| `--by-subject` | Archive under `Classes/<Subject>/` instead of flat `Classes/` |
+| `--keep-local` | Keep the downloaded audio after the note is saved |
+| `--remote-path <folder>` | Archive folder (default `Classes`) |
+| `--notes-dir <dir>` | Notes output folder (default `./notes`) |
+
+Behaviour matches the original `batch-dl`: files are classified as
+AparClassroom (iframe / `.m3u8`, routed to `Biology`/`Chemistry`/`Physics`/
+`Maths`/`Streams` by filename pattern) or YouTube, downloaded as mp3, uploaded
+once to Drive, and the local copy is deleted after a non-empty note is saved.
+The Drive archive is kept.
+
 ## Project layout
 
 ```text
 login.js               manual Google sign-in per account (./auth/<name>/)
-main.js                full pipeline: dedup → upload → chat → notes → cleanup
+main.js                single-file pipeline: dedup → upload → chat → notes → cleanup
+batch.js               batch pipeline: clipboard URLs → yt-dlp → archive → notes
 lib/account.js         one-name account resolution, rclone helpers, stale-browser kill
 lib/aistudio.js        AI Studio selectors/flow (paste, load gate, wait, copy)
+lib/pipeline.js        shared upload/link + note generation used by main.js and batch.js
+lib/batchdl.js         clipboard URL parsing + yt-dlp planning/run (ported from batch-dl)
 system_instructions.md global system instructions (tracked; edit freely)
 auth/                  gitignored browser profiles + portable rclone.conf per account
 tmp/                   gitignored per-account staging (cleaned every run)
@@ -141,8 +187,9 @@ notes/                 gitignored generated study notes
 Key selectors (verified against the live site, see `lib/aistudio.js`):
 
 - Prompt box `textarea[aria-label="Enter a prompt"]`, Run/Stop buttons by label
-- System instructions card `button[data-test-system-instructions-card]` →
-  `textarea[aria-label="System instructions"]`
+- System instructions live in the **Run settings panel**:
+  `button[aria-label="Toggle run settings panel"]` → `[data-test-system-instructions-card]`
+  → `textarea[aria-label="System instructions"]`
 - Drive-link paste attaches `ms-prompt-media` (`ms-prompt-file` chip);
   loaded = chip shows `\d+ tokens`, loading = `Loading...`
 - Latest response: last `ms-chat-turn` → hover → *Open options* →
