@@ -25,8 +25,13 @@
 // under --slides-root (default the HSC/pdf drive), then the NN-th PDF (PDFs
 // only, natural order) from the chapter's Slides/Notes folder is used. The PDF
 // is uploaded to Drive as "<name>.pdf" next to the audio and attached too.
-import { existsSync, unlinkSync } from "node:fs";
-import { basename, join } from "node:path";
+//
+// Signed links: Apars m3u8 URLs carry a short-lived exp/sig (~2h). Each signed
+// manifest is fetched up front and downloaded from the saved local playlist
+// (its segments are unsigned), so a long queue can't outlive the signature;
+// links already past exp are skipped with a warning instead of 403-spamming.
+import { existsSync, unlinkSync, mkdirSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import {
   resolveAccount,
   assertBrowserProfile,
@@ -48,11 +53,40 @@ import {
   expandGroups,
   planCommands,
   runPlan,
+  iframeCmd,
   subjectForUrl,
   isYoutube,
   urlExpiry,
+  IFRAME_USER_AGENT,
 } from "./lib/batchdl.js";
 import { resolveSlides, slidesRoot } from "./lib/slides.js";
+
+/**
+ * Fetch a signed Apars m3u8 manifest and save it locally. The manifest URL is
+ * time-limited, but the segment URLs it lists are unsigned, so a locally saved
+ * playlist can be downloaded at any time. Returns the local path on success, or
+ * null to fall back to the remote URL (master playlists whose child variants may
+ * themselves be signed are left remote on purpose).
+ */
+async function prefetchManifest(url, destPath) {
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": IFRAME_USER_AGENT } });
+    if (!res.ok) {
+      console.log(`[${acct.account}] playlist fetch HTTP ${res.status} (using remote URL)`);
+      return null;
+    }
+    const body = await res.text();
+    if (!body.startsWith("#EXTM3U") || body.includes("#EXT-X-STREAM-INF")) {
+      console.log(`[${acct.account}] playlist is a master/not-m3u8 (using remote URL)`);
+      return null;
+    }
+    await Bun.write(destPath, body);
+    return destPath;
+  } catch (e) {
+    console.log(`[${acct.account}] playlist fetch failed: ${e.message} (using remote URL)`);
+    return null;
+  }
+}
 
 const rawArgs = process.argv.slice(2);
 let accountArg = null;
@@ -250,6 +284,26 @@ const dirState = ensureCleanWorkDir(acct.workDir);
 console.log(
   `[${acct.account}] Work dir ${acct.workDir}/ (${dirState.created ? "created" : "cleaned"}).`,
 );
+
+// --- pre-fetch signed Apars manifests --------------------------------------
+// Grab each time-limited m3u8 playlist now, while its signature is valid, and
+// rewrite the plan to download from the saved local copy. The segments are
+// unsigned, so this makes the download immune to the manifest's expiry even if
+// the queue is long — and it runs before any YouTube work.
+const m3u8Plans = plans.filter((p) => p.m3u8 && p.name && p.template);
+if (m3u8Plans.length) {
+  const plDir = join(acct.workDir, "playlists");
+  mkdirSync(plDir, { recursive: true });
+  let saved = 0;
+  for (const [i, plan] of m3u8Plans.entries()) {
+    const dest = resolve(join(plDir, `p${String(i).padStart(2, "0")}.m3u8`));
+    if (await prefetchManifest(plan.urls[0], dest)) {
+      plan.cmd = iframeCmd([`file://${dest}`], plan.dir, plan.template, { fileUrls: true });
+      saved++;
+    }
+  }
+  console.log(`[${acct.account}] pre-fetched ${saved}/${m3u8Plans.length} signed playlist(s)`);
+}
 
 const downloaded = [];
 for (const plan of plans) {
