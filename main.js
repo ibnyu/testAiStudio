@@ -27,13 +27,18 @@ import { LATEST_FLASH } from "./lib/models.js";
 import { acquireLock } from "./lib/lock.js";
 import { installSignalHandlers } from "./lib/browser.js";
 import { stateDir } from "./lib/state.js";
+import { printUsage } from "./lib/usage.js";
 
 const cfg = loadConfig();
 const rawArgs = process.argv.slice(2);
+if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
+  printUsage();
+  process.exit(0);
+}
 let windowMode = cfg.windowMode || "show";
 let headless = false;
 let notion = cfg.notion?.enabled ?? true;
-let genTimeoutMs = (cfg.genTimeoutMin ?? 60) * 60 * 1000; // safety net only; copy waits for real completion
+let genTimeoutMs = (cfg.genTimeoutMin ?? 10) * 60 * 1000; // safety net only; copy waits for real completion
 let model = cfg.model || LATEST_FLASH;
 let cleanEnabled = cfg.audioClean?.enabled ?? false;
 const positionals = [];

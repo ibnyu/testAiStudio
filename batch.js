@@ -1,12 +1,13 @@
-// Unified batch pipeline: clipboard URLs -> yt-dlp download -> Drive archive
-// -> AI Studio notes. One command, no intermediate Drive re-download.
+// Zaknotes v2: clipboard URLs -> yt-dlp download -> Drive archive -> AI Studio
+// notes. One command, no intermediate Drive re-download.
 //
+// Full guide: USAGE.md (also printed by `--help`). Flags summary:
 // Usage:
 //   bun batch.js [account] [--file urls.txt] [--dry-run] [--limit N]
 //                [--gen-timeout MIN] [--minimize|--tile|--show|--headless]
 //                [--no-archive] [--no-reuse] [--keep-local] [--remote-path Classes]
 //                [--notes-dir ./notes] [--no-slides] [--slides-root DIR]
-//                [--model SLUG|latest-flash] [--resume] [--force]
+//                [--model SLUG|latest-flash] [--resume|--no-resume] [--force]
 //                [--clean-audio] [--backup-account NAME] [--no-backup]
 //
 // Settings default to ./config.json (see `bun config.js`); every flag below
@@ -51,12 +52,14 @@ import {
   removeRemote,
   generateNoteFromUrl,
   pushNoteIfConfigured,
+  existingNotionTitles,
 } from "./lib/pipeline.js";
 import {
   readClipboardGroups,
   parseGroups,
   expandGroups,
   planCommands,
+  findDownloaded,
   runPlan,
   iframeCmd,
   subjectForUrl,
@@ -71,6 +74,7 @@ import { cleanAudio, ffmpegAvailable } from "./lib/audio.js";
 import { LATEST_FLASH } from "./lib/models.js";
 import { acquireLock } from "./lib/lock.js";
 import { installSignalHandlers } from "./lib/browser.js";
+import { printUsage } from "./lib/usage.js";
 
 /**
  * Fetch a signed Apars m3u8 manifest and save it locally. The manifest URL is
@@ -102,11 +106,15 @@ async function prefetchManifest(url, destPath) {
 const cfg = loadConfig();
 
 const rawArgs = process.argv.slice(2);
+if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
+  printUsage();
+  process.exit(0);
+}
 let accountArg = null;
 let urlsFile = null;
 let dryRun = false;
 let limit = null;
-let genTimeoutMs = (cfg.genTimeoutMin ?? 60) * 60 * 1000;
+let genTimeoutMs = (cfg.genTimeoutMin ?? 10) * 60 * 1000;
 let windowMode = cfg.windowMode || "minimize";
 let notion = cfg.notion?.enabled ?? true;
 let archive = cfg.archive?.enabled ?? true;
@@ -118,7 +126,7 @@ let notesDir = "./notes";
 let slides = cfg.slides?.enabled ?? true;
 let slidesRootPath = cfg.slides?.root || null;
 let model = cfg.model || LATEST_FLASH;
-let resume = false;
+let resume = cfg.resume ?? true;
 let force = false;
 let cleanAudioEnabled = cfg.audioClean?.enabled ?? false;
 let backupAccount = cfg.backupAccount || null;
@@ -149,6 +157,7 @@ for (let i = 0; i < rawArgs.length; i++) {
   else if (a === "--notes-dir") notesDir = rawArgs[++i];
   else if (a === "--model") model = rawArgs[++i];
   else if (a === "--resume") resume = true;
+  else if (a === "--no-resume") resume = false;
   else if (a === "--force") force = true;
   else if (a === "--clean-audio") cleanAudioEnabled = true;
   else if (a === "--no-clean-audio") cleanAudioEnabled = false;
@@ -199,7 +208,6 @@ if (urlsFile) {
 }
 if (limit) items = items.slice(0, limit);
 if (!items.length) throw new Error("no URLs to process");
-
 const meta = new Map(items.filter((it) => it.name).map((it) => [it.url, it]));
 const downloadRoot = join(acct.workDir, "downloads");
 const remotePathFor = (subject) =>
@@ -235,7 +243,7 @@ const expiredUrls = new Set(
     })
     .map((it) => it.url),
 );
-const plans = planCommands(
+let plans = planCommands(
   urls.filter((u) => !reuseByUrl.has(u) && !expiredUrls.has(u)),
   downloadRoot,
   meta,
@@ -245,6 +253,43 @@ const plans = planCommands(
 // YouTube work so they are fetched while their `exp` is still valid. This does
 // NOT change processing order (notes are still produced in clipboard order).
 plans.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
+
+// An earlier run may already have downloaded some media (kept in downloads/):
+// reuse those files rather than fetching them again. Only named lectures can be
+// matched this way; the reused file then flows through the same archive/note
+// pipeline as a fresh download.
+const localReused = [];
+plans = plans.filter((plan) => {
+  if (!reuse) return true;
+  if (!plan.name) return true;
+  const found = findDownloaded(plan.dir, plan.name);
+  if (!found) return true;
+  localReused.push({ plan, file: found });
+  return false;
+});
+if (localReused.length) {
+  console.log(
+    `[${acct.account}] reuse:     ${localReused.length} already-downloaded file(s) kept from a previous run`,
+  );
+}
+const localReuseNames = new Set(localReused.map(({ plan }) => plan.name));
+
+// --- resume: skip lectures already noted -----------------------------------
+// Resume is on by default. A lecture counts as done when its note exists
+// locally or is already in Notion (matched by title). --force regenerates
+// regardless; --no-resume turns the check off.
+const resumeTitles =
+  resume && notion ? await existingNotionTitles({ enabled: true }) : new Set();
+const noteDoneReason = (name, noteFile) => {
+  if (existsSync(noteFile)) return "local note";
+  if (name && resumeTitles.has(name)) return "in Notion";
+  return null;
+};
+if (resume) {
+  console.log(
+    `[${acct.account}] resume:    on (${resumeTitles.size} note title(s) in Notion) — --force regenerates, --no-resume disables`,
+  );
+}
 
 // --- resolve slide PDFs (position in the chapter folder, PDFs only) --------
 // The clip's lecture number picks the NN-th PDF, so the pairing is verifiable
@@ -270,6 +315,11 @@ console.log(`[${acct.account}] batch:     ${urls.length} URL(s), in copy order:`
 items.forEach((it, i) => {
   let tag = it.name ? ` -> ${it.name}` : ` [${subjectForUrl(it.url)}]`;
   if (reuseByUrl.has(it.url)) tag += "  (reuse: already archived)";
+  else if (it.name && localReuseNames.has(it.name)) tag += "  (reuse: already downloaded)";
+  if (resume && !force && it.name) {
+    const why = noteDoneReason(it.name, join(notesDir, it.name + ".md"));
+    if (why) tag += `  (resume: ${why})`;
+  }
   const exp = urlExpiry(it.url);
   if (exp) {
     const left = exp - nowSecs;
@@ -318,7 +368,6 @@ console.log(
   `[${acct.account}] audio:     ${cleanAudioEnabled ? "clean (ffmpeg loudnorm)" : "as downloaded"}`,
 );
 if (backupAcct) console.log(`[${acct.account}] backup:    ${backupAcct.account} (on failure)`);
-if (resume) console.log(`[${acct.account}] resume:    skipping lectures whose note already exists`);
 
 if (dryRun) {
   console.log("\ncommands:");
@@ -329,9 +378,9 @@ if (dryRun) {
 
 // --- download --------------------------------------------------------------
 const sysText = await readSystemInstructions();
-const dirState = ensureCleanWorkDir(acct.workDir);
+const dirState = ensureCleanWorkDir(acct.workDir, { keep: ["downloads"] });
 console.log(
-  `[${acct.account}] Work dir ${acct.workDir}/ (${dirState.created ? "created" : "cleaned"}).`,
+  `[${acct.account}] Work dir ${acct.workDir}/ (${dirState.created ? "created" : "cleaned"}, downloads/ kept).`,
 );
 
 // --- pre-fetch signed Apars manifests --------------------------------------
@@ -354,7 +403,13 @@ if (m3u8Plans.length) {
   console.log(`[${acct.account}] pre-fetched ${saved}/${m3u8Plans.length} signed playlist(s)`);
 }
 
-const downloaded = [];
+const downloaded = localReused.map(({ plan, file }) => ({
+  file,
+  subject: plan.subject,
+  name: plan.name,
+  clip: plan.clip,
+  index: plan.index,
+}));
 for (const plan of plans) {
   console.log(`\n[${acct.account}] --- download [${plan.label}] -> ${plan.dir}/ ---`);
   const { code, paths } = await runPlan(plan);
@@ -514,14 +569,18 @@ for (let i = 0; i < work.length; i++) {
     `\n[${acct.account}] ===== note ${i + 1}/${work.length}: ${noteBase} [${item.subject}] =====`,
   );
 
-  // Resume: a lecture with an existing note is considered done.
+  // Resume: a lecture whose note already exists (locally, in Notion, or in
+  // history) is considered done and skipped.
   const noteFile = join(notesDir, noteBase + ".md");
-  if (resume && !force && existsSync(noteFile)) {
-    console.log(`[${acct.account}] resume: ${noteFile} already exists — skipping.`);
-    skipped++;
-    tally.skippedResume++;
-    record({ name: item.name, url: item.url, subject: item.subject, status: "skipped", reason: "resume" });
-    continue;
+  if (resume && !force) {
+    const why = noteDoneReason(item.name, noteFile);
+    if (why) {
+      console.log(`[${acct.account}] resume: ${noteBase} — note already exists (${why}), skipping.`);
+      skipped++;
+      tally.skippedResume++;
+      record({ name: item.name, url: item.url, subject: item.subject, status: "skipped", reason: "resume", via: why });
+      continue;
+    }
   }
 
   const reused = !!item.dest;

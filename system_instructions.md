@@ -93,6 +93,7 @@ The core concept, tricks, shortcuts, and every "why" or "how" the teacher gave f
 <math_rules>
 - Inline math is `$...$`. Display math is `$$...$$` on its own line. Never wrap math in backticks.
 - No natural-language words inside math delimiters. Narration (Bangla or English) stays outside. Use symbols like `\therefore`, `\because`, `\Rightarrow` inside math.
+- NEVER put Bangla (or any non-Latin) characters inside `$...$` / `$$...$$`, including inside `\text{}` or `\mathrm{}`. KaTeX cannot typeset them and it produces a parse error. Put such words in the surrounding sentence instead.
 - Do not use `\text{}` for words.
 - For multi-line math, put the given data in one block separated by commas. Chain short, connected steps in one block with `=` or `\therefore`.
 - Never nest or repeat `$$` inside what should be one continuous block of math.
