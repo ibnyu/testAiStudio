@@ -167,7 +167,8 @@ bun batch.js ibny --file urls.txt --show --limit 1
 ### Naming lecture series
 
 Copy a **name clip** just before a run of URLs. The clip follows the pattern
-`Subject(3 letters) Instructor Paper Chapter`, e.g. `Phy Udv P2 Ch4`. The script
+`Subject Instructor Paper Chapter`, where the Subject is simply the first word
+(`Phy`, `Chem`, `Bio`, `HM`, `Math`, ...), e.g. `Phy Udv P2 Ch4`. The script
 numbers that run automatically, joining the number with a space so it never
 merges with the chapter:
 
