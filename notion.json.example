@@ -1,0 +1,5 @@
+{
+  "enabled": true,
+  "token": "ntn_REPLACE_WITH_YOUR_INTEGRATION_TOKEN",
+  "databaseId": "REPLACE_WITH_YOUR_DATABASE_ID"
+}

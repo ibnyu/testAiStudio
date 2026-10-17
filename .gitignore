@@ -155,3 +155,6 @@ auth/
 tmp/
 notes/
 stage/
+
+# Notion credentials (integration token + database/page id)
+notion.json

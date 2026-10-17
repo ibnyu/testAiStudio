@@ -122,6 +122,7 @@ bun main.js ridoy /path/to/lecture.pdf course/week3 --headless --gen-timeout 45
 | `--tile` | Headed, small window in the corner |
 | `--show` | Headed, left where the window manager places it (default for `main.js`) |
 | `--gen-timeout <minutes>` | Max generation wait (default 30; long audio notes need 5–10+) |
+| `--no-notion` | Skip the Notion upload for this run |
 
 Outputs:
 
@@ -161,12 +162,54 @@ bun batch.js ibny --file urls.txt --show --limit 1
 | `--keep-local` | Keep the downloaded audio after the note is saved |
 | `--remote-path <folder>` | Archive folder (default `Classes`) |
 | `--notes-dir <dir>` | Notes output folder (default `./notes`) |
+| `--no-notion` | Skip the Notion upload for this run |
 
 Behaviour matches the original `batch-dl`: files are classified as
 AparClassroom (iframe / `.m3u8`, routed to `Biology`/`Chemistry`/`Physics`/
 `Maths`/`Streams` by filename pattern) or YouTube, downloaded as mp3, uploaded
 once to Drive, and the local copy is deleted after a non-empty note is saved.
 The Drive archive is kept.
+
+## Notion export
+
+Generated notes are mirrored into Notion automatically when configured. Math
+renders as **native equation blocks** and ` ```mermaid ` fences render as
+**diagrams** — there is no manual "select the text and turn it into an equation"
+step, because the Markdown is converted into real Notion block objects before
+upload.
+
+1. Create an internal integration at <https://www.notion.so/my-integrations>
+   and copy its token.
+2. Create (or open) the database you want notes in, then share it with the
+   integration: **••• → Connections → your integration**.
+3. Copy the database ID — the 32-character id in the page URL.
+
+Configure `./notion.json` (gitignored):
+
+```json
+{
+  "enabled": true,
+  "token": "ntn_...",
+  "databaseId": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+}
+```
+
+Environment variables override the file: `NOTION_TOKEN`, `NOTION_DATABASE_ID`,
+`NOTION_PAGE_ID`. Use `pageId` instead of `databaseId` to create notes as child
+pages. A Notion failure never deletes the local note. Disable per run with
+`--no-notion`.
+
+| Markdown | Notion block |
+| -------- | ------------ |
+| `$$...$$` | `equation` block (KaTeX) |
+| `$...$` | inline `equation` rich text |
+| ` ```mermaid ` | `code` block, language `mermaid` (renders a diagram) |
+| `#` / `##` / `###` | `heading_1` / `heading_2` / `heading_3` |
+| `-` / `1.` / `- [ ]` | bulleted / numbered / to-do lists (nested) |
+| `\| a \| b \|` | `table` with `table_row` children |
+| `![alt](url)` | `image` (external URL) |
+| `---` | `divider` |
+| `> quote` | `quote` |
 
 ## Project layout
 
@@ -178,6 +221,8 @@ lib/account.js         one-name account resolution, rclone helpers, stale-browse
 lib/aistudio.js        AI Studio selectors/flow (paste, load gate, wait, copy)
 lib/pipeline.js        shared upload/link + note generation used by main.js and batch.js
 lib/batchdl.js         clipboard URL parsing + yt-dlp planning/run (ported from batch-dl)
+lib/notion.js          Markdown -> Notion blocks (equations, mermaid, tables) + upload
+notion.json.example    template for Notion token + database id (copy to notion.json)
 system_instructions.md global system instructions (tracked; edit freely)
 auth/                  gitignored browser profiles + portable rclone.conf per account
 tmp/                   gitignored per-account staging (cleaned every run)

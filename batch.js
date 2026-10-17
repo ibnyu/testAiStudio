@@ -23,6 +23,7 @@ import {
   uploadAndLink,
   removeRemote,
   generateNoteFromUrl,
+  pushNoteIfConfigured,
 } from "./lib/pipeline.js";
 import {
   readClipboardUrls,
@@ -39,6 +40,7 @@ let dryRun = false;
 let limit = null;
 let genTimeoutMs = 30 * 60 * 1000;
 let windowMode = "minimize";
+let notion = true;
 let archive = true;
 let keepLocal = false;
 let archiveFolder = "Classes";
@@ -61,6 +63,7 @@ for (let i = 0; i < rawArgs.length; i++) {
   else if (a === "--tile") windowMode = "tile";
   else if (a === "--show") windowMode = "show";
   else if (a === "--no-archive") archive = false;
+  else if (a === "--no-notion") notion = false;
   else if (a === "--by-subject") bySubject = true;
   else if (a === "--keep-local") keepLocal = true;
   else if (a === "--remote-path") archiveFolder = rawArgs[++i];
@@ -151,7 +154,7 @@ for (let i = 0; i < files.length; i++) {
         : archiveFolder
       : "uploads/";
     const { dest, publicUrl } = uploadAndLink(acct, file, remotePath);
-    await generateNoteFromUrl({
+    const { notePath } = await generateNoteFromUrl({
       acct,
       publicUrl,
       noteBaseName: basename(file),
@@ -159,6 +162,11 @@ for (let i = 0; i < files.length; i++) {
       windowMode,
       genTimeoutMs,
       notesDir,
+    });
+    await pushNoteIfConfigured({
+      notePath,
+      title: basename(notePath, ".md"),
+      enabled: notion,
     });
     if (!keepLocal) {
       unlinkSync(file);

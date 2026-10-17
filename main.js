@@ -19,11 +19,13 @@ import {
   uploadAndLink,
   removeRemote,
   generateNoteFromUrl,
+  pushNoteIfConfigured,
 } from "./lib/pipeline.js";
 
 const rawArgs = process.argv.slice(2);
 let windowMode = "show";
 let headless = false;
+let notion = true;
 let genTimeoutMs = 30 * 60 * 1000; // long generations (e.g. 1h audio) take 5-10+ min
 const positionals = [];
 for (let i = 0; i < rawArgs.length; i++) {
@@ -34,6 +36,7 @@ for (let i = 0; i < rawArgs.length; i++) {
   } else if (a === "--minimize") windowMode = "minimize";
   else if (a === "--tile") windowMode = "tile";
   else if (a === "--show") windowMode = "show";
+  else if (a === "--no-notion") notion = false;
   else if (a === "--gen-timeout") {
     const mins = Number(rawArgs[++i]);
     if (!Number.isFinite(mins) || mins <= 0) {
@@ -88,13 +91,20 @@ await Bun.write(
 await Bun.write(join(acct.workDir, "drive_link.txt"), publicUrl + "\n");
 
 // Same account's browser state. Google-side flakes are retried inside the pipeline.
-await generateNoteFromUrl({
+const { notePath } = await generateNoteFromUrl({
   acct,
   publicUrl,
   noteBaseName: basename(staged),
   sysText,
   windowMode,
   genTimeoutMs,
+});
+
+// Optionally mirror the note into Notion (equation + mermaid blocks render natively).
+await pushNoteIfConfigured({
+  notePath,
+  title: basename(notePath, ".md"),
+  enabled: notion,
 });
 
 // Inputs are removed only now that a non-empty note is confirmed on disk.
