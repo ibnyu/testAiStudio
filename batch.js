@@ -4,7 +4,7 @@
 // Usage:
 //   bun batch.js [account] [--file urls.txt] [--dry-run] [--limit N]
 //                [--gen-timeout MIN] [--minimize|--tile|--show|--headless]
-//                [--no-archive] [--keep-local] [--remote-path Classes]
+//                [--no-archive] [--no-reuse] [--keep-local] [--remote-path Classes]
 //                [--notes-dir ./notes] [--no-slides] [--slides-root DIR]
 //
 // Defaults: account=ibny, source=clipboard history, window=minimize,
@@ -36,6 +36,8 @@ import {
 import {
   readSystemInstructions,
   uploadAndLink,
+  remoteLink,
+  listArchivedMedia,
   removeRemote,
   generateNoteFromUrl,
   pushNoteIfConfigured,
@@ -60,6 +62,7 @@ let genTimeoutMs = 30 * 60 * 1000;
 let windowMode = "minimize";
 let notion = true;
 let archive = true;
+let reuse = true;
 let keepLocal = false;
 let archiveFolder = "Classes";
 let bySubject = false;
@@ -83,6 +86,7 @@ for (let i = 0; i < rawArgs.length; i++) {
   else if (a === "--tile") windowMode = "tile";
   else if (a === "--show") windowMode = "show";
   else if (a === "--no-archive") archive = false;
+  else if (a === "--no-reuse") reuse = false;
   else if (a === "--no-notion") notion = false;
   else if (a === "--no-slides") slides = false;
   else if (a === "--slides-root") slidesRootPath = rawArgs[++i];
@@ -118,10 +122,34 @@ if (urlsFile) {
 if (limit) items = items.slice(0, limit);
 if (!items.length) throw new Error("no URLs to process");
 
-const urls = items.map((it) => it.url);
 const meta = new Map(items.filter((it) => it.name).map((it) => [it.url, it]));
 const downloadRoot = join(acct.workDir, "downloads");
-const plans = planCommands(urls, downloadRoot, meta);
+const remoteDirFor = (subject) =>
+  archive ? (bySubject ? `${archiveFolder}/${subject}` : archiveFolder) : "uploads/";
+const subjectFor = (url) => (isYoutube(url) ? "YouTube" : subjectForUrl(url));
+
+// --- reuse already-archived lectures (skip re-download) --------------------
+// For each named item, look for an existing <name>.<media-ext> in the archive
+// folder. When found, skip yt-dlp and just re-link the Drive copy. Only useful
+// with archiving on (otherwise the temp remote copies were deleted).
+const reuseByUrl = new Map();
+if (reuse && archive) {
+  const listings = new Map(); // remotePath -> Map(stem -> dest)
+  for (const it of items) {
+    if (!it.name) continue;
+    const dir = remoteDirFor(subjectFor(it.url));
+    if (!listings.has(dir)) listings.set(dir, listArchivedMedia(acct, dir));
+    const dest = listings.get(dir).get(it.name);
+    if (dest) reuseByUrl.set(it.url, dest);
+  }
+}
+
+const urls = items.map((it) => it.url);
+const plans = planCommands(
+  urls.filter((u) => !reuseByUrl.has(u)),
+  downloadRoot,
+  meta,
+);
 
 // --- resolve slide PDFs (position in the chapter folder, PDFs only) --------
 // The clip's lecture number picks the NN-th PDF, so the pairing is verifiable
@@ -146,6 +174,7 @@ console.log(`[${acct.account}] mode:      ${modes.join("+")}`);
 console.log(`[${acct.account}] batch:     ${urls.length} URL(s), in copy order:`);
 items.forEach((it, i) => {
   let tag = it.name ? ` -> ${it.name}` : ` [${subjectForUrl(it.url)}]`;
+  if (reuseByUrl.has(it.url)) tag += "  (reuse: already archived)";
   if (slides) {
     if (!it.clip) tag += "  (no clip: audio only)";
     else {
@@ -169,6 +198,11 @@ console.log(`[${acct.account}] download:  ${downloadRoot}/`);
 console.log(
   `[${acct.account}] archive:   ${archive ? `${acct.rcloneRemote}${archiveFolder}/${bySubject ? "<Subject>/" : ""} (kept)` : "off (temp uploads/, deleted)"}`,
 );
+if (reuse && archive) {
+  console.log(
+    `[${acct.account}] reuse:     ${reuseByUrl.size} already archived (download skipped)`,
+  );
+}
 console.log(`[${acct.account}] notes:     ${notesDir}/`);
 console.log(`[${acct.account}] window:    ${windowMode}`);
 
@@ -186,7 +220,7 @@ console.log(
   `[${acct.account}] Work dir ${acct.workDir}/ (${dirState.created ? "created" : "cleaned"}).`,
 );
 
-const files = [];
+const downloaded = [];
 for (const plan of plans) {
   console.log(`\n[${acct.account}] --- download [${plan.label}] -> ${plan.dir}/ ---`);
   const { code, paths } = await runPlan(plan);
@@ -195,33 +229,57 @@ for (const plan of plans) {
   }
   console.log(`[${acct.account}] [${plan.label}] produced ${paths.length} file(s)`);
   for (const file of paths) {
-    files.push({ file, subject: plan.subject, name: plan.name, clip: plan.clip, index: plan.index });
+    downloaded.push({ file, subject: plan.subject, name: plan.name, clip: plan.clip, index: plan.index });
   }
 }
 
-if (!files.length) {
-  console.log(`[${acct.account}] No media files produced; nothing to process.`);
+// Build the processing list in clipboard order: reused items carry a remote
+// dest instead of a local file; unnamed items follow from the download pool
+// (matching the original plan ordering).
+const downloadedByName = new Map();
+for (const d of downloaded) if (d.name) downloadedByName.set(d.name, d);
+const work = [];
+for (const it of items) {
+  if (!it.name) continue;
+  const dest = reuseByUrl.get(it.url);
+  if (dest) {
+    work.push({ name: it.name, subject: subjectFor(it.url), clip: it.clip, index: it.index, dest });
+  } else {
+    const d = downloadedByName.get(it.name);
+    if (d) work.push(d);
+    else console.log(`[${acct.account}] warning: no media produced for "${it.name}" — skipping.`);
+  }
+}
+for (const d of downloaded) if (!d.name) work.push(d);
+
+if (!work.length) {
+  console.log(`[${acct.account}] No media files to process.`);
   process.exit(0);
 }
 
 // --- process each file -----------------------------------------------------
 let ok = 0;
 let failed = 0;
-for (let i = 0; i < files.length; i++) {
-  const { file, subject, name, clip, index } = files[i];
+for (let i = 0; i < work.length; i++) {
+  const { file, subject, name, clip, index, dest } = work[i];
   const noteBase = name || basename(file);
   console.log(
-    `\n[${acct.account}] ===== note ${i + 1}/${files.length}: ${noteBase} [${subject}] =====`,
+    `\n[${acct.account}] ===== note ${i + 1}/${work.length}: ${noteBase} [${subject}] =====`,
   );
   try {
-    const remotePath = archive
-      ? bySubject
-        ? `${archiveFolder}/${subject}`
-        : archiveFolder
-      : "uploads/";
-    const { dest, publicUrl } = uploadAndLink(acct, file, remotePath);
-    const publicUrls = [publicUrl];
-    const cleanup = [dest];
+    const remotePath = remoteDirFor(subject);
+    const publicUrls = [];
+    const cleanup = [];
+    if (dest) {
+      console.log(`[${acct.account}] Reusing archived copy: ${dest}`);
+      const publicUrl = remoteLink(acct, dest);
+      console.log(`[${acct.account}] Public link: ${publicUrl}`);
+      publicUrls.push(publicUrl);
+    } else {
+      const up = uploadAndLink(acct, file, remotePath);
+      publicUrls.push(up.publicUrl);
+      cleanup.push(up.dest);
+    }
 
     // Upload the matching slide PDF under the same base name, right after the
     // audio, then attach both (audio first) so the model sees slides + audio.
@@ -251,7 +309,7 @@ for (let i = 0; i < files.length; i++) {
       title: basename(notePath, ".md"),
       enabled: notion,
     });
-    if (!keepLocal) {
+    if (!keepLocal && file) {
       unlinkSync(file);
       console.log(`[${acct.account}] Removed local download: ${file}`);
     }
@@ -260,7 +318,7 @@ for (let i = 0; i < files.length; i++) {
   } catch (e) {
     failed++;
     console.log(
-      `[${acct.account}] ERROR on ${basename(file)}: ${e.message} — keeping local file for retry.`,
+      `[${acct.account}] ERROR on ${noteBase}: ${e.message} — keeping local file for retry.`,
     );
   }
 }
