@@ -162,6 +162,8 @@ bun batch.js ibny --file urls.txt --show --limit 1
 | `--keep-local` | Keep the downloaded audio after the note is saved |
 | `--remote-path <folder>` | Archive folder (default `Classes`) |
 | `--notes-dir <dir>` | Notes output folder (default `./notes`) |
+| `--no-slides` | Do not attach slide PDFs (audio only) |
+| `--slides-root <dir>` | Slide library root (default the `HSC/pdf` drive; env `SLIDES_ROOT`) |
 | `--no-notion` | Skip the Notion upload for this run |
 
 ### Naming lecture series
@@ -188,6 +190,30 @@ clip: Phy Mashrur P2 Ch6        # a new clip restarts the run at 01
   subject-prefixed archive names).
 - Clips and URLs can span different kinds (YouTube and Apar) in one clipboard
   batch; each group is classified and downloaded independently.
+
+### Slide PDFs (audio + slides)
+
+Each named lecture is also given its matching **slide PDF**, uploaded to Drive
+right after the audio (both under the same base name, e.g. `Phy Udv P2 Ch4 01.mp3`
+and `Phy Udv P2 Ch4 01.pdf`) and attached to the same prompt. Feeding both the
+audio and the slides produces markedly better notes.
+
+The clip's `Subject Instructor Paper Chapter` is resolved to a folder under the
+slide root (default the mounted `HSC/pdf` library):
+
+```
+<slides root>/<Subject>/<Instructor>/<Paper>/<Chapter>/
+```
+
+- Folder names are matched alias-aware, so `Phy`/`Physics`, `P1`/`Paper 1` and
+  `Ch4`/`Chapter 4` all work — no renaming needed.
+- Lecture `NN` uses the **NN-th PDF** in the chapter's `Slides` (or `Notes`)
+  folder, in natural order. Only `*.pdf` files are used.
+- If a chapter folder has no `Slides`/`Notes` subfolder, its own PDFs are used;
+  if the folder can't be found or has too few PDFs, that lecture gets audio only
+  and a warning is printed.
+- `--dry-run` prints the resolved folder and the exact slide for every lecture
+  so the pairing can be verified before anything is downloaded.
 
 Behaviour matches the original `batch-dl`: files are classified as
 AparClassroom (iframe / `.m3u8`, routed to `Biology`/`Chemistry`/`Physics`/
@@ -246,6 +272,7 @@ lib/account.js         one-name account resolution, rclone helpers, stale-browse
 lib/aistudio.js        AI Studio selectors/flow (paste, load gate, wait, copy)
 lib/pipeline.js        shared upload/link + note generation used by main.js and batch.js
 lib/batchdl.js         clipboard URL parsing + yt-dlp planning/run (ported from batch-dl)
+lib/slides.js          resolve a clip to its chapter folder + ordered slide PDFs
 lib/notion.js          Markdown -> Notion blocks (equations, mermaid, tables) + upload
 notion.json.example    template for Notion token + database id (copy to notion.json)
 system_instructions.md global system instructions (tracked; edit freely)
