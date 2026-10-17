@@ -164,6 +164,30 @@ bun batch.js ibny --file urls.txt --show --limit 1
 | `--notes-dir <dir>` | Notes output folder (default `./notes`) |
 | `--no-notion` | Skip the Notion upload for this run |
 
+### Naming lecture series
+
+Copy a **name clip** just before a run of URLs. The clip follows the pattern
+`Subject(3 letters) Instructor Paper Chapter`, e.g. `Phy Udv P2 Ch4`. The script
+numbers that run automatically, joining the number with a space so it never
+merges with the chapter:
+
+```
+clip: Phy Udv P2 Ch4
+  ... url 1   ->  Phy Udv P2 Ch4 01
+  ... url 2   ->  Phy Udv P2 Ch4 02
+clip: Phy Mashrur P2 Ch6        # a new clip restarts the run at 01
+  ... url 1   ->  Phy Mashrur P2 Ch6 01
+```
+
+- The generated name becomes the **archived filename**, the **note filename**,
+  the note's **H1 heading**, and the **Notion page title**.
+- A clip ending in a bare number (e.g. `Phy Udv P2 Ch4 04`) starts numbering
+  there instead of `01`.
+- URLs copied **without** a clip keep the old behaviour (yt-dlp title /
+  subject-prefixed archive names).
+- Clips and URLs can span different kinds (YouTube and Apar) in one clipboard
+  batch; each group is classified and downloaded independently.
+
 Behaviour matches the original `batch-dl`: files are classified as
 AparClassroom (iframe / `.m3u8`, routed to `Biology`/`Chemistry`/`Physics`/
 `Maths`/`Streams` by filename pattern) or YouTube, downloaded as mp3, uploaded

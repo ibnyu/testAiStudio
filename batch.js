@@ -10,6 +10,14 @@
 // Defaults: account=ibny, source=clipboard history, window=minimize,
 //           archive=on (uploads under Classes/ and keeps it, matching the
 //           original batch-dl flat layout), local audio deleted after a note.
+//
+// Naming: copy a name clip (Subject Instructor Paper Chapter, e.g.
+// "Phy Udv P2 Ch4") just before a run of URLs. Each URL in the run is named
+// "<clip> 01", "<clip> 02", ... (the number is space-joined so it never merges
+// with the chapter). A new clip starts the next run at 01. A trailing number in
+// the clip (e.g. "Phy Udv P2 Ch4 04") sets the starting index instead of 01.
+// The name becomes the archived filename, the note filename, the note H1, and
+// the Notion page title. URLs copied without a clip keep the old behaviour.
 import { existsSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
@@ -26,11 +34,13 @@ import {
   pushNoteIfConfigured,
 } from "./lib/pipeline.js";
 import {
-  readClipboardUrls,
-  classify,
+  readClipboardGroups,
+  parseGroups,
+  expandGroups,
   planCommands,
   runPlan,
   subjectForUrl,
+  isYoutube,
 } from "./lib/batchdl.js";
 
 const rawArgs = process.argv.slice(2);
@@ -78,29 +88,35 @@ const acct = resolveAccount(accountArg);
 assertBrowserProfile(acct.userDataDir);
 assertRcloneRemote(acct.rcloneRemote, acct.rcloneConfig);
 
-// --- gather URLs -----------------------------------------------------------
-let urls;
+// --- gather URLs and names ------------------------------------------------
+// A name clip (e.g. "Phy Udv P2 Ch4") copied just before a run of URLs names
+// that whole run; the lecture number is generated 01..N and joined by a space.
+let items;
 if (urlsFile) {
   if (!existsSync(urlsFile)) throw new Error(`URL file not found: ${urlsFile}`);
-  urls = (await Bun.file(urlsFile).text())
+  const lines = (await Bun.file(urlsFile).text())
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith("#"));
+  items = expandGroups(parseGroups(lines));
 } else {
-  urls = readClipboardUrls();
+  items = expandGroups(readClipboardGroups());
 }
-if (limit) urls = urls.slice(0, limit);
+if (limit) items = items.slice(0, limit);
+if (!items.length) throw new Error("no URLs to process");
 
-const kind = classify(urls);
+const urls = items.map((it) => it.url);
+const names = new Map(items.filter((it) => it.name).map((it) => [it.url, it.name]));
 const downloadRoot = join(acct.workDir, "downloads");
-const plans = planCommands(kind, urls, downloadRoot);
+const plans = planCommands(urls, downloadRoot, names);
 
 // --- describe --------------------------------------------------------------
-console.log(`[${acct.account}] mode:      ${kind}`);
+const modes = [...new Set(urls.map((u) => (isYoutube(u) ? "youtube" : "apar")))];
+console.log(`[${acct.account}] mode:      ${modes.join("+")}`);
 console.log(`[${acct.account}] batch:     ${urls.length} URL(s), in copy order:`);
-urls.forEach((u, i) => {
-  const tag = kind === "iframe" ? ` [${subjectForUrl(u)}]` : "";
-  console.log(`  ${String(i + 1).padStart(2)}. ${u}${tag}`);
+items.forEach((it, i) => {
+  const tag = it.name ? ` -> ${it.name}` : ` [${subjectForUrl(it.url)}]`;
+  console.log(`  ${String(i + 1).padStart(2)}. ${it.url}${tag}`);
 });
 console.log(`[${acct.account}] download:  ${downloadRoot}/`);
 console.log(
@@ -131,7 +147,7 @@ for (const plan of plans) {
     console.log(`[${acct.account}] warning: yt-dlp exited ${code} for [${plan.label}]`);
   }
   console.log(`[${acct.account}] [${plan.label}] produced ${paths.length} file(s)`);
-  for (const file of paths) files.push({ file, subject: plan.subject });
+  for (const file of paths) files.push({ file, subject: plan.subject, name: plan.name });
 }
 
 if (!files.length) {
@@ -143,9 +159,10 @@ if (!files.length) {
 let ok = 0;
 let failed = 0;
 for (let i = 0; i < files.length; i++) {
-  const { file, subject } = files[i];
+  const { file, subject, name } = files[i];
+  const noteBase = name || basename(file);
   console.log(
-    `\n[${acct.account}] ===== note ${i + 1}/${files.length}: ${basename(file)} [${subject}] =====`,
+    `\n[${acct.account}] ===== note ${i + 1}/${files.length}: ${noteBase} [${subject}] =====`,
   );
   try {
     const remotePath = archive
@@ -157,7 +174,8 @@ for (let i = 0; i < files.length; i++) {
     const { notePath } = await generateNoteFromUrl({
       acct,
       publicUrl,
-      noteBaseName: basename(file),
+      noteBaseName: noteBase,
+      title: name,
       sysText,
       windowMode,
       genTimeoutMs,
