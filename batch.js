@@ -50,6 +50,7 @@ import {
   runPlan,
   subjectForUrl,
   isYoutube,
+  urlExpiry,
 } from "./lib/batchdl.js";
 import { resolveSlides, slidesRoot } from "./lib/slides.js";
 
@@ -145,11 +146,28 @@ if (reuse && archive) {
 }
 
 const urls = items.map((it) => it.url);
+const nowSecs = Math.floor(Date.now() / 1000);
+// Signed Apars links already past their `exp` are dead (the CDN 403s
+// regardless of cookies/headers), so skip them with a clear message rather
+// than let yt-dlp dump a 403 for each.
+const expiredUrls = new Set(
+  items
+    .filter((it) => {
+      const e = urlExpiry(it.url);
+      return e !== null && e - nowSecs <= 0;
+    })
+    .map((it) => it.url),
+);
 const plans = planCommands(
-  urls.filter((u) => !reuseByUrl.has(u)),
+  urls.filter((u) => !reuseByUrl.has(u) && !expiredUrls.has(u)),
   downloadRoot,
   meta,
 );
+
+// Signed Apars links die within minutes; download them before the long-lived
+// YouTube work so they are fetched while their `exp` is still valid. This does
+// NOT change processing order (notes are still produced in clipboard order).
+plans.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
 
 // --- resolve slide PDFs (position in the chapter folder, PDFs only) --------
 // The clip's lecture number picks the NN-th PDF, so the pairing is verifiable
@@ -175,6 +193,13 @@ console.log(`[${acct.account}] batch:     ${urls.length} URL(s), in copy order:`
 items.forEach((it, i) => {
   let tag = it.name ? ` -> ${it.name}` : ` [${subjectForUrl(it.url)}]`;
   if (reuseByUrl.has(it.url)) tag += "  (reuse: already archived)";
+  const exp = urlExpiry(it.url);
+  if (exp) {
+    const left = exp - nowSecs;
+    tag += expiredUrls.has(it.url)
+      ? "  ! LINK EXPIRED (skipped)"
+      : `  (link expires in ${Math.round(left / 60)}m)`;
+  }
   if (slides) {
     if (!it.clip) tag += "  (no clip: audio only)";
     else {
@@ -201,6 +226,12 @@ console.log(
 if (reuse && archive) {
   console.log(
     `[${acct.account}] reuse:     ${reuseByUrl.size} already archived (download skipped)`,
+  );
+}
+const expiredCount = expiredUrls.size;
+if (expiredCount) {
+  console.log(
+    `[${acct.account}] WARNING:  ${expiredCount} signed link(s) already expired and will be skipped — re-copy them from the site just before running.`,
   );
 }
 console.log(`[${acct.account}] notes:     ${notesDir}/`);
@@ -247,7 +278,13 @@ for (const it of items) {
   } else {
     const d = downloadedByName.get(it.name);
     if (d) work.push(d);
-    else console.log(`[${acct.account}] warning: no media produced for "${it.name}" — skipping.`);
+    else if (expiredUrls.has(it.url)) {
+      console.log(
+        `[${acct.account}] skipping "${it.name}": signed link expired — re-copy it from the site and re-run.`,
+      );
+    } else {
+      console.log(`[${acct.account}] warning: no media produced for "${it.name}" — skipping.`);
+    }
   }
 }
 for (const d of downloaded) if (!d.name) work.push(d);
