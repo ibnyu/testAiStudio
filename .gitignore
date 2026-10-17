@@ -158,3 +158,9 @@ stage/
 
 # Notion credentials (integration token + database/page id)
 notion.json
+
+# Local user settings (config.json.example is the committed template)
+config.json
+
+# Persistent run history + usage counters
+state/

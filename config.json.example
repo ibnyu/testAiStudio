@@ -1,0 +1,36 @@
+{
+  "account": "ibny",
+  "backupAccount": null,
+  "model": "latest-flash",
+  "windowMode": null,
+  "genTimeoutMin": 60,
+  "retry": {
+    "attempts": 3,
+    "baseDelayMs": 5000,
+    "maxDelayMs": 60000
+  },
+  "archive": {
+    "enabled": true,
+    "folder": "Classes",
+    "bySubject": false
+  },
+  "reuse": true,
+  "slides": {
+    "enabled": true,
+    "root": null
+  },
+  "notion": {
+    "enabled": true
+  },
+  "audioClean": {
+    "enabled": false,
+    "loudnessTarget": -16
+  },
+  "history": {
+    "enabled": true,
+    "dir": "./state"
+  },
+  "counters": {
+    "enabled": true
+  }
+}

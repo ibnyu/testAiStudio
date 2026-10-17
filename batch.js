@@ -6,6 +6,11 @@
 //                [--gen-timeout MIN] [--minimize|--tile|--show|--headless]
 //                [--no-archive] [--no-reuse] [--keep-local] [--remote-path Classes]
 //                [--notes-dir ./notes] [--no-slides] [--slides-root DIR]
+//                [--model SLUG|latest-flash] [--resume] [--force]
+//                [--clean-audio] [--backup-account NAME] [--no-backup]
+//
+// Settings default to ./config.json (see `bun config.js`); every flag below
+// overrides the matching config value for this run.
 //
 // Defaults: account=ibny, source=clipboard history, window=minimize,
 //           archive=on (uploads under Classes/ and keeps it, matching the
@@ -60,6 +65,12 @@ import {
   IFRAME_USER_AGENT,
 } from "./lib/batchdl.js";
 import { resolveSlides, slidesRoot } from "./lib/slides.js";
+import { loadConfig } from "./lib/config.js";
+import { appendHistory, bumpCounters, stateDir } from "./lib/state.js";
+import { cleanAudio, ffmpegAvailable } from "./lib/audio.js";
+import { LATEST_FLASH } from "./lib/models.js";
+import { acquireLock } from "./lib/lock.js";
+import { installSignalHandlers } from "./lib/browser.js";
 
 /**
  * Fetch a signed Apars m3u8 manifest and save it locally. The manifest URL is
@@ -88,22 +99,29 @@ async function prefetchManifest(url, destPath) {
   }
 }
 
+const cfg = loadConfig();
+
 const rawArgs = process.argv.slice(2);
 let accountArg = null;
 let urlsFile = null;
 let dryRun = false;
 let limit = null;
-let genTimeoutMs = 30 * 60 * 1000;
-let windowMode = "minimize";
-let notion = true;
-let archive = true;
-let reuse = true;
+let genTimeoutMs = (cfg.genTimeoutMin ?? 60) * 60 * 1000;
+let windowMode = cfg.windowMode || "minimize";
+let notion = cfg.notion?.enabled ?? true;
+let archive = cfg.archive?.enabled ?? true;
+let reuse = cfg.reuse ?? true;
 let keepLocal = false;
-let archiveFolder = "Classes";
-let bySubject = false;
+let archiveFolder = cfg.archive?.folder || "Classes";
+let bySubject = cfg.archive?.bySubject ?? false;
 let notesDir = "./notes";
-let slides = true;
-let slidesRootPath = null;
+let slides = cfg.slides?.enabled ?? true;
+let slidesRootPath = cfg.slides?.root || null;
+let model = cfg.model || LATEST_FLASH;
+let resume = false;
+let force = false;
+let cleanAudioEnabled = cfg.audioClean?.enabled ?? false;
+let backupAccount = cfg.backupAccount || null;
 
 for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i];
@@ -129,16 +147,41 @@ for (let i = 0; i < rawArgs.length; i++) {
   else if (a === "--keep-local") keepLocal = true;
   else if (a === "--remote-path") archiveFolder = rawArgs[++i];
   else if (a === "--notes-dir") notesDir = rawArgs[++i];
+  else if (a === "--model") model = rawArgs[++i];
+  else if (a === "--resume") resume = true;
+  else if (a === "--force") force = true;
+  else if (a === "--clean-audio") cleanAudioEnabled = true;
+  else if (a === "--no-clean-audio") cleanAudioEnabled = false;
+  else if (a === "--backup-account") backupAccount = rawArgs[++i];
+  else if (a === "--no-backup") backupAccount = null;
   else if (a.startsWith("--")) throw new Error(`Unknown flag: ${a}`);
   else if (!accountArg) accountArg = a;
   else throw new Error(`Unexpected argument: ${a}`);
 }
-accountArg = accountArg || "ibny";
+accountArg = accountArg || cfg.account || "ibny";
 slidesRootPath = slidesRootPath || slidesRoot();
 
 const acct = resolveAccount(accountArg);
 assertBrowserProfile(acct.userDataDir);
 assertRcloneRemote(acct.rcloneRemote, acct.rcloneConfig);
+
+// Refuse to run if another batch for this account is already active (an
+// interrupted run can otherwise keep the browser profile locked).
+installSignalHandlers();
+acquireLock(join(stateDir(cfg), `${acct.account}.lock`));
+
+// Optional fallback account: used per-lecture when the primary fails.
+let backupAcct = null;
+if (backupAccount && backupAccount !== acct.account) {
+  try {
+    const b = resolveAccount(backupAccount);
+    assertBrowserProfile(b.userDataDir);
+    assertRcloneRemote(b.rcloneRemote, b.rcloneConfig);
+    backupAcct = b;
+  } catch (e) {
+    console.log(`[${acct.account}] backup account "${backupAccount}" unavailable: ${e.message}`);
+  }
+}
 
 // --- gather URLs and names ------------------------------------------------
 // A name clip (e.g. "Phy Udv P2 Ch4") copied just before a run of URLs names
@@ -159,7 +202,7 @@ if (!items.length) throw new Error("no URLs to process");
 
 const meta = new Map(items.filter((it) => it.name).map((it) => [it.url, it]));
 const downloadRoot = join(acct.workDir, "downloads");
-const remoteDirFor = (subject) =>
+const remotePathFor = (subject) =>
   archive ? (bySubject ? `${archiveFolder}/${subject}` : archiveFolder) : "uploads/";
 const subjectFor = (url) => (isYoutube(url) ? "YouTube" : subjectForUrl(url));
 
@@ -172,7 +215,7 @@ if (reuse && archive) {
   const listings = new Map(); // remotePath -> Map(stem -> dest)
   for (const it of items) {
     if (!it.name) continue;
-    const dir = remoteDirFor(subjectFor(it.url));
+    const dir = remotePathFor(subjectFor(it.url));
     if (!listings.has(dir)) listings.set(dir, listArchivedMedia(acct, dir));
     const dest = listings.get(dir).get(it.name);
     if (dest) reuseByUrl.set(it.url, dest);
@@ -270,6 +313,12 @@ if (expiredCount) {
 }
 console.log(`[${acct.account}] notes:     ${notesDir}/`);
 console.log(`[${acct.account}] window:    ${windowMode}`);
+console.log(`[${acct.account}] model:     ${model}`);
+console.log(
+  `[${acct.account}] audio:     ${cleanAudioEnabled ? "clean (ffmpeg loudnorm)" : "as downloaded"}`,
+);
+if (backupAcct) console.log(`[${acct.account}] backup:    ${backupAcct.account} (on failure)`);
+if (resume) console.log(`[${acct.account}] resume:    skipping lectures whose note already exists`);
 
 if (dryRun) {
   console.log("\ncommands:");
@@ -349,72 +398,203 @@ if (!work.length) {
 }
 
 // --- process each file -----------------------------------------------------
+const stateDirectory = stateDir(cfg);
+const historyEnabled = cfg.history?.enabled ?? true;
+const countersEnabled = cfg.counters?.enabled ?? true;
+const record = (entry) => {
+  if (historyEnabled) appendHistory(stateDirectory, entry);
+};
+
+const cleanEnabled = cleanAudioEnabled && ffmpegAvailable();
+if (cleanAudioEnabled && !cleanEnabled) {
+  console.log(`[${acct.account}] warning: ffmpeg not found — audio clean disabled.`);
+}
+
+/**
+ * Upload (or reuse) the audio + slide PDF for one item on one account and
+ * generate the note. Throws on failure; the caller decides about a fallback.
+ */
+async function runItem(acctLocal, item) {
+  const remotePath = remotePathFor(item.subject);
+  const publicUrls = [];
+  const remoteCleanup = [];
+  const localCleanup = [];
+
+  if (item.dest) {
+    console.log(`[${acctLocal.account}] Reusing archived copy: ${item.dest}`);
+    const publicUrl = remoteLink(acctLocal, item.dest);
+    console.log(`[${acctLocal.account}] Public link: ${publicUrl}`);
+    publicUrls.push(publicUrl);
+  } else {
+    let upFile = item.file;
+    if (cleanEnabled) {
+      const cleaned = cleanAudio(item.file, {
+        target: cfg.audioClean?.loudnessTarget ?? -16,
+        log: (m) => console.log(`[${acctLocal.account}] ${m}`),
+      });
+      if (cleaned) {
+        upFile = cleaned;
+        localCleanup.push(cleaned);
+        console.log(`[${acctLocal.account}] Cleaned audio: ${basename(cleaned)}`);
+      }
+    }
+    const up = uploadAndLink(acctLocal, upFile, remotePath);
+    publicUrls.push(up.publicUrl);
+    remoteCleanup.push(up.dest);
+  }
+
+  const noteBase = item.name || basename(item.file || item.dest);
+  // Upload the matching slide PDF under the audio's base name, right after it,
+  // so the model still sees slides + audio (audio first).
+  let pdf = null;
+  if (slides && item.clip && item.index) pdf = pdfForItem({ clip: item.clip, index: item.index });
+  if (slides && item.clip && item.index && !pdf) {
+    console.log(`[${acctLocal.account}] warning: no slide PDF for "${noteBase}" (audio only).`);
+  }
+  if (pdf) {
+    const up = uploadAndLink(acctLocal, pdf, remotePath, `${noteBase}.pdf`);
+    publicUrls.push(up.publicUrl);
+    remoteCleanup.push(up.dest);
+    console.log(`[${acctLocal.account}] Slide: ${basename(pdf)} -> ${noteBase}.pdf`);
+  }
+
+  const res = await generateNoteFromUrl({
+    acct: acctLocal,
+    publicUrls,
+    noteBaseName: noteBase,
+    sysText,
+    windowMode,
+    model,
+    genTimeoutMs,
+    retry: cfg.retry,
+    notesDir,
+  });
+  return { ...res, remoteCleanup, localCleanup, noteBase };
+}
+
+/** Push to Notion and clean up local + (for temp uploads) remote files. */
+async function finalizeNote(res, item, acctLocal) {
+  const notionUrl = await pushNoteIfConfigured({
+    notePath: res.notePath,
+    title: basename(res.notePath, ".md"),
+    enabled: notion,
+  });
+  if (!keepLocal && item.file) {
+    try {
+      unlinkSync(item.file);
+      console.log(`[${acctLocal.account}] Removed local download: ${item.file}`);
+    } catch {}
+  }
+  for (const f of res.localCleanup) {
+    try {
+      unlinkSync(f);
+    } catch {}
+  }
+  if (!archive) for (const d of res.remoteCleanup) removeRemote(acctLocal, d);
+  return notionUrl;
+}
+
 let ok = 0;
 let failed = 0;
+let skipped = 0;
+const tally = {
+  notesOk: 0,
+  notesFailed: 0,
+  skippedReuse: 0,
+  skippedExpired: expiredUrls.size,
+  skippedResume: 0,
+  chars: 0,
+  byModel: {},
+};
+
 for (let i = 0; i < work.length; i++) {
-  const { file, subject, name, clip, index, dest } = work[i];
-  const noteBase = name || basename(file);
+  const item = work[i];
+  const noteBase = item.name || basename(item.file || item.dest || "lecture");
   console.log(
-    `\n[${acct.account}] ===== note ${i + 1}/${work.length}: ${noteBase} [${subject}] =====`,
+    `\n[${acct.account}] ===== note ${i + 1}/${work.length}: ${noteBase} [${item.subject}] =====`,
   );
-  try {
-    const remotePath = remoteDirFor(subject);
-    const publicUrls = [];
-    const cleanup = [];
-    if (dest) {
-      console.log(`[${acct.account}] Reusing archived copy: ${dest}`);
-      const publicUrl = remoteLink(acct, dest);
-      console.log(`[${acct.account}] Public link: ${publicUrl}`);
-      publicUrls.push(publicUrl);
-    } else {
-      const up = uploadAndLink(acct, file, remotePath);
-      publicUrls.push(up.publicUrl);
-      cleanup.push(up.dest);
-    }
 
-    // Upload the matching slide PDF under the same base name, right after the
-    // audio, then attach both (audio first) so the model sees slides + audio.
-    let pdf = null;
-    if (slides && clip && index) pdf = pdfForItem({ clip, index });
-    if (slides && clip && index && !pdf) {
-      console.log(`[${acct.account}] warning: no slide PDF for "${noteBase}" (audio only).`);
-    }
-    if (pdf) {
-      const up = uploadAndLink(acct, pdf, remotePath, `${noteBase}.pdf`);
-      publicUrls.push(up.publicUrl);
-      cleanup.push(up.dest);
-      console.log(`[${acct.account}] Slide: ${basename(pdf)} -> ${noteBase}.pdf`);
-    }
+  // Resume: a lecture with an existing note is considered done.
+  const noteFile = join(notesDir, noteBase + ".md");
+  if (resume && !force && existsSync(noteFile)) {
+    console.log(`[${acct.account}] resume: ${noteFile} already exists — skipping.`);
+    skipped++;
+    tally.skippedResume++;
+    record({ name: item.name, url: item.url, subject: item.subject, status: "skipped", reason: "resume" });
+    continue;
+  }
 
-    const { notePath } = await generateNoteFromUrl({
-      acct,
-      publicUrls,
-      noteBaseName: noteBase,
-      sysText,
-      windowMode,
-      genTimeoutMs,
-      notesDir,
-    });
-    await pushNoteIfConfigured({
-      notePath,
-      title: basename(notePath, ".md"),
-      enabled: notion,
-    });
-    if (!keepLocal && file) {
-      unlinkSync(file);
-      console.log(`[${acct.account}] Removed local download: ${file}`);
+  const reused = !!item.dest;
+  let lastError = null;
+  let done = false;
+
+  for (const acctTry of [acct, backupAcct].filter(Boolean)) {
+    const isBackup = acctTry.account !== acct.account;
+    if (isBackup && !item.file) {
+      console.log(
+        `[${acctTry.account}] cannot fall back: no local file (item was reused from the primary archive).`,
+      );
+      continue;
     }
-    if (!archive) for (const d of cleanup) removeRemote(acct, d);
-    ok++;
-  } catch (e) {
+    try {
+      if (isBackup) {
+        console.log(`[${acct.account}] falling back to backup account "${acctTry.account}"...`);
+      }
+      const useItem = isBackup ? { ...item, dest: null } : item;
+      const res = await runItem(acctTry, useItem);
+      const notionUrl = await finalizeNote(res, useItem, acctTry);
+      const chars = (res.markdown || "").length;
+      const usedModel = res.model || (model === LATEST_FLASH ? "latest-flash" : model);
+      ok++;
+      tally.notesOk++;
+      tally.chars += chars;
+      if (reused) tally.skippedReuse++;
+      tally.byModel[usedModel] = (tally.byModel[usedModel] || 0) + 1;
+      record({
+        name: item.name,
+        url: item.url,
+        subject: item.subject,
+        status: "ok",
+        account: acctTry.account,
+        model: usedModel,
+        chars,
+        reused,
+        notePath: res.notePath,
+        notionUrl: notionUrl || null,
+      });
+      done = true;
+      break;
+    } catch (e) {
+      lastError = e;
+      console.log(`[${acctTry.account}] ERROR on ${noteBase}: ${e.message}`);
+    }
+  }
+
+  if (!done) {
     failed++;
-    console.log(
-      `[${acct.account}] ERROR on ${noteBase}: ${e.message} — keeping local file for retry.`,
-    );
+    tally.notesFailed++;
+    console.log(`[${acct.account}] keeping local file for retry.`);
+    record({
+      name: item.name,
+      url: item.url,
+      subject: item.subject,
+      status: "failed",
+      error: lastError ? lastError.message : "unknown error",
+    });
   }
 }
 
-console.log(`\n[${acct.account}] done: ${ok} note(s) generated, ${failed} failed.`);
+if (countersEnabled) {
+  const totals = bumpCounters(stateDirectory, { runs: 1, ...tally });
+  console.log(
+    `\n[${acct.account}] cumulative: ${totals.notesOk} ok / ${totals.notesFailed} failed ` +
+      `across ${totals.runs} run(s), ${totals.chars} chars.`,
+  );
+}
+
+console.log(
+  `\n[${acct.account}] done: ${ok} note(s) generated, ${failed} failed, ${skipped} skipped.`,
+);
 if (failed && !keepLocal) {
   console.log(`[${acct.account}] Failed inputs were kept under ${downloadRoot}/`);
 }

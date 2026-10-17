@@ -42,6 +42,35 @@ chat, up to 3 attempts.
 > ⚠️ **Destructive by design:** on success the original input file is deleted
 > from disk and its Drive copy removed. Keep backups of anything irreplaceable.
 
+## Settings
+
+Tunable, run-wide settings live in `./config.json` (gitignored; created on
+demand). All keys are optional — built-in defaults apply until you set
+something. Manage it with the settings tool:
+
+```bash
+bun config.js              # show the resolved config (defaults + overrides)
+bun config.js set model gemini-4-argon
+bun config.js get retry.attempts
+bun config.js unset model
+bun config.js models       # list live AI Studio models + the latest Flash
+bun config.js counters     # cumulative usage totals
+bun config.js history 20   # last 20 processed lectures
+```
+
+Every command-line flag still overrides the config for a single run
+(`--model`, `--clean-audio`, `--resume`, `--backup-account`, …). Notable keys:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `model` | `latest-flash` | `latest-flash` auto-selects the newest Flash from the live AI Studio picker; or pin a slug (e.g. `gemini-3.8-flash`, `gemini-4-argon`). |
+| `genTimeoutMin` | `6` | Wall-clock cap per generation (plus a 120 s no-progress stall guard). |
+| `retry` | `{attempts:3, baseDelayMs:5000, maxDelayMs:60000}` | Capped exponential backoff for transient Google-side errors. |
+| `backupAccount` | `null` | Second account used to retry a lecture the primary account fails. |
+| `audioClean` | `{enabled:false, loudnessTarget:-16}` | Optional ffmpeg loudness-normalisation before upload. |
+| `reuse` | `true` | Reuse already-archived lectures instead of re-downloading. |
+| `history` / `counters` | `{enabled:true, dir:"./state"}` | Per-lecture log + cumulative totals under `./state/`. |
+
 ## Prerequisites
 
 - [Bun](https://bun.sh) (tested on 1.4.x)

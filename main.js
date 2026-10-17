@@ -21,12 +21,21 @@ import {
   generateNoteFromUrl,
   pushNoteIfConfigured,
 } from "./lib/pipeline.js";
+import { loadConfig } from "./lib/config.js";
+import { cleanAudio, ffmpegAvailable } from "./lib/audio.js";
+import { LATEST_FLASH } from "./lib/models.js";
+import { acquireLock } from "./lib/lock.js";
+import { installSignalHandlers } from "./lib/browser.js";
+import { stateDir } from "./lib/state.js";
 
+const cfg = loadConfig();
 const rawArgs = process.argv.slice(2);
-let windowMode = "show";
+let windowMode = cfg.windowMode || "show";
 let headless = false;
-let notion = true;
-let genTimeoutMs = 30 * 60 * 1000; // long generations (e.g. 1h audio) take 5-10+ min
+let notion = cfg.notion?.enabled ?? true;
+let genTimeoutMs = (cfg.genTimeoutMin ?? 60) * 60 * 1000; // safety net only; copy waits for real completion
+let model = cfg.model || LATEST_FLASH;
+let cleanEnabled = cfg.audioClean?.enabled ?? false;
 const positionals = [];
 for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i];
@@ -37,6 +46,9 @@ for (let i = 0; i < rawArgs.length; i++) {
   else if (a === "--tile") windowMode = "tile";
   else if (a === "--show") windowMode = "show";
   else if (a === "--no-notion") notion = false;
+  else if (a === "--model") model = rawArgs[++i];
+  else if (a === "--clean-audio") cleanEnabled = true;
+  else if (a === "--no-clean-audio") cleanEnabled = false;
   else if (a === "--gen-timeout") {
     const mins = Number(rawArgs[++i]);
     if (!Number.isFinite(mins) || mins <= 0) {
@@ -66,6 +78,9 @@ if (!existsSync(localFile)) {
   throw new Error(`Local file not found: ${localFile}`);
 }
 
+installSignalHandlers();
+acquireLock(join(stateDir(cfg), `${acct.account}.lock`));
+
 const sysText = await readSystemInstructions();
 
 // All staging work happens inside the per-account temp dir:
@@ -77,7 +92,18 @@ console.log(
 const staged = join(acct.workDir, basename(localFile));
 copyFileSync(localFile, staged);
 
-const { dest, publicUrl } = uploadAndLink(acct, staged, remotePath);
+// Optional audio clean pass (loudness normalisation) before upload.
+let uploadFile = staged;
+let cleanedFile = null;
+if (cleanEnabled && ffmpegAvailable()) {
+  cleanedFile = cleanAudio(staged, {
+    target: cfg.audioClean?.loudnessTarget ?? -16,
+    log: (m) => console.log(`[${acct.account}] ${m}`),
+  });
+  if (cleanedFile) uploadFile = cleanedFile;
+}
+
+const { dest, publicUrl } = uploadAndLink(acct, uploadFile, remotePath);
 
 // The prompt input is the Drive link, not a pasted file.
 await Bun.write(
@@ -97,7 +123,9 @@ const { notePath } = await generateNoteFromUrl({
   noteBaseName: basename(staged),
   sysText,
   windowMode,
+  model,
   genTimeoutMs,
+  retry: cfg.retry,
 });
 
 // Optionally mirror the note into Notion (equation + mermaid blocks render natively).
@@ -113,6 +141,10 @@ await pushNoteIfConfigured({
 if (resolve(staged).startsWith(resolve(acct.workDir) + "/") && existsSync(staged)) {
   unlinkSync(staged);
   console.log(`[${acct.account}] Removed staged input: ${staged}`);
+}
+if (cleanedFile && existsSync(cleanedFile)) {
+  unlinkSync(cleanedFile);
+  console.log(`[${acct.account}] Removed cleaned audio: ${cleanedFile}`);
 }
 // Original input file: removed per workflow policy, but never project files.
 {
