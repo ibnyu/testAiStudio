@@ -181,7 +181,7 @@ clip: Phy Mashrur P2 Ch6        # a new clip restarts the run at 01
 ```
 
 - The generated name becomes the **archived filename**, the **note filename**,
-  the note's **H1 heading**, and the **Notion page title**.
+  and the **Notion page title**. The note body keeps the model's own heading.
 - A clip ending in a bare number (e.g. `Phy Udv P2 Ch4 04`) starts numbering
   there instead of `01`.
 - URLs copied **without** a clip keep the old behaviour (yt-dlp title /

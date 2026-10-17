@@ -16,8 +16,9 @@
 // "<clip> 01", "<clip> 02", ... (the number is space-joined so it never merges
 // with the chapter). A new clip starts the next run at 01. A trailing number in
 // the clip (e.g. "Phy Udv P2 Ch4 04") sets the starting index instead of 01.
-// The name becomes the archived filename, the note filename, the note H1, and
-// the Notion page title. URLs copied without a clip keep the old behaviour.
+// The name becomes the archived filename, the note filename, and the Notion
+// page title (the note body keeps the model's own heading). URLs copied without
+// a clip keep the old behaviour.
 import { existsSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
@@ -175,7 +176,6 @@ for (let i = 0; i < files.length; i++) {
       acct,
       publicUrl,
       noteBaseName: noteBase,
-      title: name,
       sysText,
       windowMode,
       genTimeoutMs,
