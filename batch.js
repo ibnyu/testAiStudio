@@ -36,8 +36,9 @@
 // manifest is fetched up front and downloaded from the saved local playlist
 // (its segments are unsigned), so a long queue can't outlive the signature;
 // links already past exp are skipped with a warning instead of 403-spamming.
-import { existsSync, unlinkSync, mkdirSync } from "node:fs";
+import { existsSync, unlinkSync, mkdirSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { backoffDelay } from "./lib/retry.js";
 import {
   resolveAccount,
   assertBrowserProfile,
@@ -410,11 +411,58 @@ const downloaded = localReused.map(({ plan, file }) => ({
   clip: plan.clip,
   index: plan.index,
 }));
+
+/**
+ * Delete partial yt-dlp artifacts for a named plan so a retry starts fresh.
+ * With --no-part a truncated stream is written straight to the final filename,
+ * so leaving it behind makes yt-dlp believe the download is already complete.
+ */
+function cleanPartialDownload(plan) {
+  if (!plan.name) return;
+  let entries;
+  try {
+    entries = readdirSync(plan.dir);
+  } catch {
+    return;
+  }
+  const prefix = plan.name + ".";
+  for (const f of entries) {
+    if (f.startsWith(prefix)) {
+      try {
+        unlinkSync(join(plan.dir, f));
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Run a download plan, retrying a failed yt-dlp run a couple of times so a
+ * transient DNS/network blip does not drop the lecture. Apars links are fetched
+ * from the saved local playlist, whose segments are unsigned, so a retry does
+ * not depend on the (possibly expired) original signed URL.
+ */
+async function runPlanWithRetry(plan, attempts = 3) {
+  let result = { code: 1, paths: [] };
+  for (let a = 1; a <= attempts; a++) {
+    result = await runPlan(plan);
+    if (result.code === 0) return result;
+    if (a < attempts) {
+      console.log(
+        `[${acct.account}] download [${plan.label}] failed (yt-dlp exit ${result.code}); ` +
+          `retry ${a}/${attempts - 1} after clearing partials...`,
+      );
+      cleanPartialDownload(plan);
+      await Bun.sleep(backoffDelay(a, { baseDelayMs: 5000, maxDelayMs: 30000 }));
+    }
+  }
+  return result;
+}
+
 for (const plan of plans) {
   console.log(`\n[${acct.account}] --- download [${plan.label}] -> ${plan.dir}/ ---`);
-  const { code, paths } = await runPlan(plan);
+  const { code, paths } = await runPlanWithRetry(plan);
   if (code !== 0) {
-    console.log(`[${acct.account}] warning: yt-dlp exited ${code} for [${plan.label}]`);
+    console.log(`[${acct.account}] warning: yt-dlp exited ${code} for [${plan.label}] after retries`);
   }
   console.log(`[${acct.account}] [${plan.label}] produced ${paths.length} file(s)`);
   for (const file of paths) {
@@ -435,13 +483,30 @@ for (const it of items) {
     work.push({ name: it.name, subject: subjectFor(it.url), clip: it.clip, index: it.index, dest });
   } else {
     const d = downloadedByName.get(it.name);
-    if (d) work.push(d);
-    else if (expiredUrls.has(it.url)) {
-      console.log(
-        `[${acct.account}] skipping "${it.name}": signed link expired — re-copy it from the site and re-run.`,
-      );
+    if (d) {
+      work.push(d);
     } else {
-      console.log(`[${acct.account}] warning: no media produced for "${it.name}" — skipping.`);
+      // No fresh download this run. If the media is already on disk (from a
+      // previous run, or a recovered download), use it even when the signed URL
+      // has since expired — otherwise a queue that outlived its links could
+      // never be finished without re-copying every URL.
+      const local = findDownloaded(join(downloadRoot, subjectFor(it.url)), it.name);
+      if (local) {
+        console.log(`[${acct.account}] using local file for "${it.name}" (${basename(local)}).`);
+        work.push({
+          name: it.name,
+          subject: subjectFor(it.url),
+          clip: it.clip,
+          index: it.index,
+          file: local,
+        });
+      } else if (expiredUrls.has(it.url)) {
+        console.log(
+          `[${acct.account}] skipping "${it.name}": signed link expired — re-copy it from the site and re-run.`,
+        );
+      } else {
+        console.log(`[${acct.account}] warning: no media produced for "${it.name}" — skipping.`);
+      }
     }
   }
 }
