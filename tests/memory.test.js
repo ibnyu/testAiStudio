@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { ensureMemoryHeadroom, memorySnapshotMB } from "../lib/memory.js";
+import {
+  criticalMemoryPressure,
+  ensureMemoryHeadroom,
+  memorySnapshotMB,
+} from "../lib/memory.js";
 
 describe("memory headroom", () => {
   test("snapshot reports plausible MiB values", () => {
@@ -28,5 +32,16 @@ describe("memory headroom", () => {
     expect(err.kind).toBe("memory");
     expect(err.retryable).toBe(true);
     expect(err.message).toContain("Not enough free memory");
+  });
+
+  test("runtime pressure check is disabled with minFreeMB=0", () => {
+    expect(criticalMemoryPressure({ minFreeMB: 0 })).toBeNull();
+  });
+
+  test("runtime pressure check reports a reason under an impossible floor", () => {
+    if (!memorySnapshotMB()) return; // non-Linux
+    const p = criticalMemoryPressure({ minFreeMB: Number.MAX_SAFE_INTEGER });
+    expect(p).not.toBeNull();
+    expect(p.reason).toContain("RAM free");
   });
 });

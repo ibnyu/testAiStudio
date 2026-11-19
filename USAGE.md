@@ -393,7 +393,9 @@ the machine down with it:
   run checks `MemAvailable`/swap. If RAM is below `ZS_MIN_FREE_MB` (default
   1000) or swap below `ZS_MIN_SWAP_MB` (default 128), it reaps leftover
   browsers, waits up to 90 s, then fails the lecture with a clear message instead
-  of freezing the machine.
+  of freezing the machine. The generation poll loop also aborts a turn when RAM
+  drops below `ZS_ABORT_FREE_MB` (default 300) or when swap is nearly exhausted;
+  the browser is closed immediately, releasing the memory.
 - **Background throttling re-enabled.** Playwright normally keeps minimized /
   occluded renders at full priority and disables Chromium's IPC-flood
   protection. Those defaults are dropped so a minimized tab is throttled and a

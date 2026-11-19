@@ -102,7 +102,8 @@ Desktop-freeze safeguards (see [USAGE.md](USAGE.md#desktop-freeze-protection)):
 the browser and its renderers run at low CPU/IO priority (`ZS_BROWSER_NICE=0`
 disables), browser temp files go to disk under `./tmp/browser-tmp`, and a launch
 is refused while the machine is low on RAM/swap (`ZS_MIN_FREE_MB`, default 1000;
-`ZS_MIN_SWAP_MB`, default 128).
+`ZS_MIN_SWAP_MB`, default 128), and a running turn is aborted if RAM falls below
+`ZS_ABORT_FREE_MB` (default 300).
 
 ## Prerequisites
 
