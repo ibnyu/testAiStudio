@@ -87,6 +87,7 @@ import { cleanAudio, ffmpegAvailable } from "./lib/audio.js";
 import { LATEST_FLASH, modelChain } from "./lib/models.js";
 import { probeDuration, planChunks, splitMedia, PartCache } from "./lib/chunk.js";
 import { assertValidNote, scrubNoteArtifacts, inspectNote } from "./lib/validate.js";
+import { errorHint } from "./lib/errors.js";
 import { sanitizeMath } from "./lib/sanitize.js";
 import { resolveGenerationAccounts, generateWithFallback } from "./lib/fallback.js";
 import { acquireLock } from "./lib/lock.js";
@@ -1049,6 +1050,8 @@ async function runItem(item, i, lane) {
     failed++;
     tally.notesFailed++;
     console.log(`${tag}[${acct.account}] ERROR on ${noteBase}: ${e.message}`);
+    const hint = errorHint(e);
+    if (hint) console.log(`${tag}[${acct.account}] hint: ${hint}`);
     console.log(`${tag}[${acct.account}] keeping local file for retry.`);
     record({
       name: item.name,
