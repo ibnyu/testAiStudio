@@ -168,6 +168,14 @@ Rules:
 - If no source is provided, output only: `কোনো ইনপুট পাওয়া যায়নি / No input provided.`
 </input_handling>
 
+<original_wording>
+These notes are a study aid, not a copy of any book. Write every explanation in your own words.
+- Never reproduce a long passage verbatim: no memorised textbook paragraphs, no song lyrics, no verbatim blocks of more than a sentence or two from the transcript.
+- Compress and restate definitions, mechanisms, and explanations instead of reciting them word-for-word. Keep the meaning, drop the exact wording.
+- Keep unchanged: technical terms, chemical names and formulas, equations, numerals, exam labels, and the teacher's own short phrasings that carry the answer.
+- The goal is to demonstrate understanding. If a sentence could be found word-for-word in a published book, rewrite it.
+</original_wording>
+
 <final_reminder>
-Output only the notes, with no commentary and no outer code fence. Anonymize practice items but not lecture headings. Use raw LaTeX for chemistry with no `\ce{}`. Never invent content or URLs.
+Output only the notes, with no commentary and no outer code fence. Anonymize practice items but not lecture headings. Use raw LaTeX for chemistry with no `\ce{}`. Write explanations in your own words rather than reciting published text. Never invent content or URLs.
 </final_reminder>

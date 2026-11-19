@@ -97,7 +97,7 @@ async function listModels() {
   const { resolveAccount, assertBrowserProfile } = await import("./lib/account.js");
   const { launchPersistentContext } = await import("cloakbrowser");
   const { gotoNewChat } = await import("./lib/aistudio.js");
-  const { discoverModels, pickLatestFlash, DEFAULT_MODEL } = await import("./lib/models.js");
+  const { discoverModels, pickLatestFlash, DEFAULT_MODEL, resolveModel } = await import("./lib/models.js");
 
   const cfg = loadConfig();
   const acct = resolveAccount(rest[0] || cfg.account);
@@ -114,10 +114,16 @@ async function listModels() {
     const pick = pickLatestFlash(models);
     console.log(bold("AI Studio models:"));
     for (const m of models) {
-      const tag = pick && m.slug === pick.slug ? dim("  <- latest Flash") : "";
-      console.log(`  ${m.slug.padEnd(28)} ${m.name}${tag}`);
+      const tags = [];
+      if (m.slug === DEFAULT_MODEL) tags.push("default");
+      if (pick && m.slug === pick.slug) tags.push("latest Flash");
+      if (m.aliasOf) tags.push(`-> ${m.aliasOf}`);
+      console.log(`  ${m.slug.padEnd(30)} ${m.name}${tags.length ? dim(`  [${tags.join(", ")}]`) : ""}`);
     }
-    console.log(`\nlatest Flash: ${pick ? pick.slug : DEFAULT_MODEL}`);
+    const resolved = await resolveModel(page, cfg.model || DEFAULT_MODEL);
+    console.log(`\ndefault model: ${DEFAULT_MODEL}`);
+    console.log(`latest Flash:  ${pick ? pick.slug : DEFAULT_MODEL}`);
+    console.log(`configured:    ${cfg.model || DEFAULT_MODEL} -> ${resolved.slug} (${resolved.source})`);
   } finally {
     await ctx.close();
   }

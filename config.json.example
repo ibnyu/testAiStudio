@@ -1,7 +1,25 @@
 {
   "account": "ibny",
   "backupAccount": null,
-  "model": "latest-flash",
+  "model": "gemini-4-hydrogen",
+  "modelFallbacks": [],
+  "accounts": {
+    "strategy": "on-failure",
+    "backups": [],
+    "rotateModels": true
+  },
+  "chunking": {
+    "enabled": true,
+    "maxMinutes": 120,
+    "ceilingMinutes": 150,
+    "genTimeoutMin": 20,
+    "watchdogMin": 26,
+    "retryAttempts": 2,
+    "slidesMaxPages": 40,
+    "slidesMaxMB": 12
+  },
+  "minNoteChars": 400,
+  "jobs": 1,
   "windowMode": null,
   "genTimeoutMin": 10,
   "retry": {
