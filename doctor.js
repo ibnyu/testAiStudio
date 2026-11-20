@@ -4,7 +4,7 @@
 //   bun doctor.js audit [--json] [--notes-dir DIR]
 //   bun doctor.js scrub [--yes] [--names a,b]
 //   bun doctor.js salvage [--yes] [--names a,b] [--notion]
-//   bun doctor.js repair [--yes] [--dry-run] [--only severe|tiny|all] [--names a,b] [--wait MIN]
+//   bun doctor.js repair [--yes] [--dry-run] [--only severe|tiny|all] [--names a,b] [--wait MIN] [--jobs N]
 //   bun doctor.js cleanup [--yes] [--dry-run] [--drive] [--drive-noted] [--drive-noted]
 //   bun doctor.js notion-dedupe [--yes] [--dry-run]
 //   bun doctor.js notion-sync [--yes] [--dry-run] [--replace] [--names a,b]
@@ -395,8 +395,11 @@ async function cmdRepair() {
   await Bun.write(mediaFile, mediaLines.join("\n") + "\n");
 
   console.log(bold(`\nregenerating ${restorable.length} note(s) ...`));
+  // Regeneration is mostly waiting on the model, so let repair drive the same
+  // parallel lanes as a normal batch (clipboard work is serialized in lib).
+  const jobs = Math.max(1, Math.min(4, Number(valueOf("--jobs", "1")) || 1));
   const proc = Bun.spawn(
-    ["bun", "batch.js", "--media-file", mediaFile, "--force", "--no-resume", "--keep-local"],
+    ["bun", "batch.js", "--media-file", mediaFile, "--force", "--no-resume", "--keep-local", "--jobs", String(jobs)],
     { cwd: ROOT, stdout: "inherit", stderr: "inherit" },
   );
   const code = await proc.exited;
@@ -700,7 +703,7 @@ function printUsage() {
   bun doctor.js audit [--json] [--notes-dir DIR]
   bun doctor.js scrub [--yes] [--names a,b]
   bun doctor.js salvage [--yes] [--names a,b] [--notion]
-  bun doctor.js repair [--yes] [--dry-run] [--only severe|tiny|all] [--names a,b]
+  bun doctor.js repair [--yes] [--dry-run] [--only severe|tiny|all] [--names a,b] [--jobs N]
   bun doctor.js cleanup [--yes] [--dry-run] [--drive]
   bun doctor.js notion-dedupe [--yes] [--dry-run]
   bun doctor.js notion-sync [--yes] [--dry-run]

@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { copyLatestResponseMarkdown } from "../lib/aistudio.js";
+import { installClipboardCapture } from "../lib/clipboard-capture.js";
 
 const TRACE = `**Analyzing the Input Data**
 
@@ -46,7 +47,7 @@ const ANSWER = `# ১. সংখ্যা পদ্ধতি
 
 ${"বিস্তারিত ব্যাখ্যা। ".repeat(60)}`;
 
-const page_html = ({ withAnswer }) => `<!doctype html>
+const page_html = ({ withAnswer, mode }) => `<!doctype html>
 <ms-chat-turn>
   <div class="turn">
     <div class="thoughts-panel">
@@ -63,7 +64,22 @@ const page_html = ({ withAnswer }) => `<!doctype html>
 </ms-chat-turn>
 <div id="menu"></div>
 <script>
+  const MODE = ${JSON.stringify(mode || "clipboard")};
   const TEXT = { thoughts: ${JSON.stringify(TRACE)}, answer: ${JSON.stringify(ANSWER)} };
+  const copyText = (text) => {
+    if (MODE === "exec") {
+      // What AI Studio actually does (Angular CDK): hidden textarea + select()
+      // + document.execCommand("copy").
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      return;
+    }
+    navigator.clipboard.writeText(text);
+  };
   document.querySelectorAll('button[aria-label="Open options"]').forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -73,7 +89,7 @@ const page_html = ({ withAnswer }) => `<!doctype html>
       item.textContent = "Copy as markdown";
       item.style.cssText =
         "position:fixed;top:120px;left:120px;z-index:99;background:#fff;padding:8px;border:1px solid #000";
-      item.addEventListener("click", () => navigator.clipboard.writeText(TEXT[btn.dataset.kind]));
+      item.addEventListener("click", () => copyText(TEXT[btn.dataset.kind]));
       menu.appendChild(item);
     });
   });
@@ -102,7 +118,8 @@ beforeAll(async () => {
     hostname: "127.0.0.1",
     fetch: (req) => {
       const withAnswer = new URL(req.url).searchParams.get("answer") !== "0";
-      return new Response(page_html({ withAnswer }), { headers: { "content-type": "text/html; charset=utf-8" } });
+      const mode = new URL(req.url).searchParams.get("mode") || "clipboard";
+      return new Response(page_html({ withAnswer, mode }), { headers: { "content-type": "text/html; charset=utf-8" } });
     },
   });
   browser = await chromium.launch({
@@ -152,5 +169,42 @@ e2e("the mock reproduces the first-menu hazard", () => {
     const text = await page.evaluate(() => navigator.clipboard.readText());
     expect(text).toContain("I'm carefully reviewing");
     await page.close();
+  }, 60000);
+});
+
+// The stealth Chromium can resolve a clipboard write while the OS clipboard
+// keeps its previous contents. The in-page capture must carry the note then.
+e2e("copy with a clipboard that never reaches the OS", () => {
+  async function brokenContext() {
+    const ctx = await browser.newContext({ permissions: [] });
+    await ctx.addInitScript(() => {
+      window.__stale = "stale note from an earlier lecture";
+      const proto = Clipboard.prototype;
+      proto.writeText = async () => {};
+      proto.readText = async () => window.__stale;
+    });
+    await installClipboardCapture(ctx);
+    return ctx;
+  }
+
+  test("captures the execCommand textarea payload (AI Studio's real path)", async () => {
+    const ctx = await brokenContext();
+    const page = await ctx.newPage();
+    await page.goto(`http://127.0.0.1:${server.port}/?answer=1&mode=exec`);
+    const text = await copyLatestResponseMarkdown(page);
+    expect(text).toContain("সংখ্যা পদ্ধতি");
+    expect(text).not.toContain("stale note");
+    expect(text).not.toContain("I'm carefully reviewing");
+    await ctx.close();
+  }, 60000);
+
+  test("captures a navigator.clipboard.writeText payload", async () => {
+    const ctx = await brokenContext();
+    const page = await ctx.newPage();
+    await page.goto(`http://127.0.0.1:${server.port}/?answer=1`);
+    const text = await copyLatestResponseMarkdown(page);
+    expect(text).toContain("সংখ্যা পদ্ধতি");
+    expect(text).not.toContain("stale note");
+    await ctx.close();
   }, 60000);
 });

@@ -93,3 +93,20 @@ describe("Notion rich-text item cap", () => {
     }
   });
 });
+
+describe("oversized block splitting", () => {
+  test("preserves every character of a single huge rich-text run", async () => {
+    const { splitOversizedBlock } = await import("../lib/notion.js");
+    const content = "x".repeat(5000);
+    const block = {
+      object: "block",
+      type: "paragraph",
+      paragraph: { rich_text: [{ type: "text", text: { content }, annotations: { bold: true } }] },
+    };
+    const parts = splitOversizedBlock(block);
+    expect(parts.length).toBeGreaterThan(1);
+    const joined = parts.map((p) => p.paragraph.rich_text[0].text.content).join("");
+    expect(joined).toBe(content);
+    expect(parts.every((p) => p.paragraph.rich_text[0].text.content.length <= 2000)).toBe(true);
+  });
+});

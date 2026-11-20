@@ -5,6 +5,7 @@ import {
   displayMathBalanced,
   inlineMathBalanced,
   looksLikeReasoning,
+  looksLikePageDump,
   reasoningStats,
   MIN_NOTE_CHARS,
 } from "../lib/validate.js";
@@ -191,5 +192,35 @@ I'm now doing a final pass over the material to make sure nothing is missed befo
     expect(s.sentences).toBeGreaterThan(5);
     expect(s.ratio).toBeGreaterThan(0.5);
     expect(reasoningStats("# শিরোনাম\n\nসাধারণ আলোচনা।").ratio).toBe(0);
+  });
+});
+
+describe("page-dump detection", () => {
+  test("flags a collapsed DOM dump with widget chrome", () => {
+    const dump =
+      "অধ্যায় ৯ গত ক্লাসের বাড়ির কাজসমস্যা ১**প্রশ্ন:** `I=40sin(942t)I = 40\\sin(942t)I=40sin(942t)` " +
+      "hub Diagramcodecontent_copyfullscreenexpand_less " +
+      "![](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=) " +
+      "A".repeat(6000);
+    expect(looksLikePageDump(dump)).toBe(true);
+    expect(inspectNote(dump, { minChars: 100 }).issues.map((i) => i.code)).toContain("page-dump");
+  });
+
+  test("flags a long single-line note even without toolbar labels", () => {
+    expect(looksLikePageDump("শব্দ ".repeat(1200))).toBe(true);
+  });
+
+  test("does not flag clean structured markdown", () => {
+    expect(looksLikePageDump(good)).toBe(false);
+    const dense = Array.from({ length: 200 }, (_, i) => `লাইন ${i}: ব্যাখ্যা ও সমীকরণ $x_${i}^2$।`).join("\n");
+    expect(looksLikePageDump(dense)).toBe(false);
+  });
+
+  test("scrub drops embedded data: images but keeps the prose", () => {
+    const md = "## শিরোনাম\n\nচিত্র: ![diagram](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)\n\nপাঠ্য।";
+    const out = scrubNoteArtifacts(md);
+    expect(out).not.toContain("data:image");
+    expect(out).toContain("শিরোনাম");
+    expect(out).toContain("পাঠ্য");
   });
 });
