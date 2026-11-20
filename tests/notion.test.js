@@ -110,3 +110,24 @@ describe("oversized block splitting", () => {
     expect(parts.every((p) => p.paragraph.rich_text[0].text.content.length <= 2000)).toBe(true);
   });
 });
+
+describe("link sanitizing", () => {
+  test("keeps a real absolute link", () => {
+    const rt = inlineToRichText("see [notes](https://example.com/x) here");
+    const link = rt.find((t) => t.text?.link);
+    expect(link.text.link.url).toBe("https://example.com/x");
+  });
+
+  test("does not emit a link for a relative/placeholder URL", () => {
+    const rt = inlineToRichText("[CB'25](a) and [RUET'25-26](a)");
+    expect(rt.some((t) => t.text?.link)).toBe(false);
+    expect(rt.map((t) => t.text?.content || "").join("")).toContain("RUET'25-26");
+  });
+
+  test("truncates an over-long absolute URL to the cap", () => {
+    const rt = inlineToRichText(`[big](https://e.com/${"x".repeat(2500)})`);
+    const link = rt.find((t) => t.text?.link);
+    expect(link.text.link.url.length).toBe(2000);
+    expect(link.text.content).toBe("big");
+  });
+});
