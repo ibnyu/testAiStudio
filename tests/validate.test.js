@@ -207,7 +207,18 @@ describe("page-dump detection", () => {
   });
 
   test("flags a long single-line note even without toolbar labels", () => {
-    expect(looksLikePageDump("শব্দ ".repeat(1200))).toBe(true);
+    expect(looksLikePageDump("শব্দ ".repeat(3000))).toBe(true);
+  });
+
+  test("an embedded data: image alone proves a DOM dump", () => {
+    const dump = "## শিরোনাম\n\n" + "পাঠ্য।\n\n".repeat(40) + "![](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)";
+    expect(looksLikePageDump(dump)).toBe(true);
+  });
+
+  test("a long, properly paragraph-ed note is not a dump", () => {
+    const note = Array.from({ length: 200 }, (_, i) => `অনুচ্ছেদ ${i}: ${"ব্যাখ্যা এবং উদাহরণ। ".repeat(4)}`).join("\n\n");
+    expect(note.length).toBeGreaterThan(8000);
+    expect(looksLikePageDump(note)).toBe(false);
   });
 
   test("does not flag clean structured markdown", () => {
