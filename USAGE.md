@@ -240,7 +240,7 @@ code block; URLs longer than 2000 chars are truncated or downgraded to text.
 bun doctor.js audit [--json]
 bun doctor.js scrub [--yes]
 bun doctor.js salvage [--yes] [--names a,b] [--notion]
-bun doctor.js repair [--yes] [--dry-run] [--only severe|tiny|all] [--names a,b] [--wait MIN]
+bun doctor.js repair [--yes] [--dry-run] [--only severe|tiny|all] [--names a,b] [--wait MIN] [--jobs N]
 bun doctor.js cleanup [--yes] [--drive]
 bun doctor.js notion-dedupe [--yes]
 bun doctor.js notion-sync [--yes] [--replace] [--names a,b]
@@ -265,7 +265,8 @@ bun doctor.js models
   manifest (`--media-file`), so no source URL is needed. If another run already
   holds the account's browser profile (a live `batch.js`), repair stops before
   restoring anything; `--wait 120` queues it instead and starts as soon as the
-  lock is released.
+  lock is released. `--jobs N` regenerates N notes in parallel (same lanes as
+  `batch.js --jobs`; generation dominates, so 2–3 is usually safe).
 - **cleanup** — deletes partial/zero-byte downloads and local media whose
   lecture already has a valid note. `--drive` also removes interrupted
   `.part`/`.ytdl`/`.inprogress` and zero-byte objects from the Drive archive;

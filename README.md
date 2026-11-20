@@ -278,6 +278,7 @@ bun doctor.js salvage --yes         # fix stray $$ / dangling tails without medi
 bun doctor.js salvage --yes --notion  # …and replace the Notion pages
 bun doctor.js repair --dry-run      # show which invalid notes can be regenerated
 bun doctor.js repair --yes          # restore media, regenerate, replace Notion pages
+bun doctor.js repair --yes --jobs 2 # same, two notes at a time
 bun doctor.js cleanup --dry-run     # show partial/zero-byte and already-noted media
 bun doctor.js cleanup --yes [--drive] [--drive-noted]
 bun doctor.js notion-dedupe --yes   # archive older duplicate pages
